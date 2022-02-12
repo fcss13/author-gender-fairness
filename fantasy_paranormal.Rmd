@@ -103,7 +103,7 @@ ggplot(books_authors_genre, aes(x=gender)) +
     stat="count", 
     fill="forestgreen", 
     alpha=0.5) +
-  ggtitle( sprintf("Amount of %s Authors by (Binary) Genders", BOOK_GENRE) ) +
+  ggtitle( sprintf("Amount of %s books by Authors Genders", BOOK_GENRE) ) +
   geom_text(
     aes(label = ..count..), 
     stat = "count",
