@@ -271,7 +271,7 @@ getF1 <- function(the_df) {
 }
 ```
 
-#reduce samplesize for shorter runtime
+#reduce samplesize for shorter runtime (only for fantasy)
 
 ```{r}
 genre_books_reviews = genre_books_reviews[sample(nrow(genre_books_reviews),50000),]
