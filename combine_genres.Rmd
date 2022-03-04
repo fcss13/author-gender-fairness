@@ -1,0 +1,216 @@
+---
+title: "combining_genres"
+output: html_document
+---
+#Load libary
+```{r}
+suppressPackageStartupMessages({
+  library(ggplot2)
+  library(dplyr)
+  library("formattable")
+})
+```
+
+
+#Set working directory
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+setwd(dirname(rstudioapi::getSourceEditorContext()$path))
+```
+
+#Constants
+```{r}
+genre_names = c("children", "comics_graphic", "history_biography", 
+                "fantasy_paranormal", "mystery_thriller_crime")
+boot_sample_size = c(1000, 1000, 1000, 100, 1000) #type in how many boot samples every genre has. The order must match genre_names.
+```
+
+## load data
+
+here we combine all genre data sets
+
+```{r}
+
+combined_data_df = data.frame(n = double(),
+                 mean_recgap = double(), 
+                 algo = character(),
+                 sd_recgap = double(),
+                 mean_perf = double(),
+                 sd_perf = double(),
+                 se = double(),
+                 ic = double(),
+                 genre = character())
+
+for (i in seq(1, length(genre_names))) {
+  
+  ubcf_data = read.csv(sprintf("output/%s_cf_boot_results_UBCF_%i.csv", 
+                               genre_names[i], boot_sample_size[i]))
+  
+  ibcf_data = read.csv(sprintf("output/%s_cf_boot_results_IBCF_%i.csv", 
+                               genre_names[i], boot_sample_size[i]))
+  
+  pop_data = read.csv(sprintf("output/%s_cf_boot_results_POP_%i.csv", 
+                               genre_names[i], boot_sample_size[i]))
+  
+  all_algos_df = rbind(ubcf_data, ibcf_data, pop_data)
+  
+  sum_recgaps <- all_algos_df %>%
+  group_by(algo) %>%
+  summarise( 
+    n=n(),
+    mean_recgap=mean(recgap),
+    sd_recgap=sd(recgap),
+    mean_perf=mean(performance),
+    sd_perf=sd(performance)
+  ) %>%
+  mutate( se=sd_recgap/sqrt(n))  %>%
+  mutate( ic=se * qt((1-0.05)/2 + .5, n-1))
+  
+  sum_recgaps$genre = genre_names[i] # add column with genre name
+  
+  combined_data_df = rbind(combined_data_df, sum_recgaps)
+}
+
+
+```
+
+## Plots
+
+
+```{r}
+ggplot(combined_data_df, 
+       aes(fill=genre, y=abs(mean_recgap), x=reorder(algo, -mean_recgap))) + 
+    geom_bar(position=position_dodge(), stat="identity") +
+  geom_errorbar( 
+    aes(ymin=abs(mean_recgap)-ic, ymax=abs(mean_recgap)+ic), 
+    width=0.4, 
+    alpha=0.9, 
+    size=0.5, 
+    position=position_dodge(.9)) +
+  ggtitle("Comparison of mean bootstrapped recgaps, by algorithm and genre. \nWhiskers indicate 95% confidence intervall.") +
+  labs(x = "algorithm", y = "recgap") +
+  theme_bw()
+
+#get range of absolute recgap for every algo
+combined_data_df_abs = combined_data_df
+combined_data_df_abs$mean_recgap = abs(combined_data_df_abs$mean_recgap)
+
+combined_data_df_abs %>%
+  group_by(algo) %>%
+  summarise_at(vars(mean_recgap), list(min_recgap = min)) -> min_table
+combined_data_df_abs %>%
+  group_by(algo) %>%
+  summarise_at(vars(mean_recgap), list(max_recgap = max)) -> max_table
+range_table = inner_join(min_table, max_table)
+
+range_table$min_recgap = percent(range_table$min_recgap)
+range_table$max_recgap = percent(range_table$max_recgap)
+range_table
+
+```
+#Add n_reviews for men and women
+##Values are added by hand
+
+```{r}
+combined_data_df$n_reviews_women = NA
+
+combined_data_df$n_reviews_women[combined_data_df$genre == "children"] = 135117 
+combined_data_df$n_reviews_women[combined_data_df$genre == "comics_graphic"] = 9362 
+combined_data_df$n_reviews_women[combined_data_df$genre == "history_biography"] = 135117  
+combined_data_df$n_reviews_women[combined_data_df$genre == "fantasy_paranormal"] = 583663  
+combined_data_df$n_reviews_women[combined_data_df$genre == "mystery_thriller_crime"] = 95299  
+
+combined_data_df$n_reviews_men = NA
+
+combined_data_df$n_reviews_men[combined_data_df$genre == "children"] = 33299 
+combined_data_df$n_reviews_men[combined_data_df$genre == "comics_graphic"] = 34529 
+combined_data_df$n_reviews_men[combined_data_df$genre == "history_biography"] = 51089   
+combined_data_df$n_reviews_men[combined_data_df$genre == "fantasy_paranormal"] = 158062  
+combined_data_df$n_reviews_men[combined_data_df$genre == "mystery_thriller_crime"] = 94127 
+
+combined_data_df$reviewgap = combined_data_df$n_reviews_women - combined_data_df$n_reviews_men
+```
+
+#Correlation recgap x reviewgap
+
+```{r}
+recgap = combined_data_df$mean_recgap
+reviewgap = combined_data_df$reviewgap
+
+#correlation
+cor(reviewgap, recgap)
+
+#scatterplot
+ggplot(combined_data_df, aes(x=reviewgap, y=mean_recgap, color=algo)) + 
+    geom_point(size=6)
+
+#regression line 
+ggplot(combined_data_df,aes(reviewgap, mean_recgap)) +
+  stat_summary(fun.data= mean_cl_normal) + 
+  geom_smooth(method='lm', se=F)+ theme(panel.grid.major = element_blank(), 
+                                  panel.grid.minor = element_blank(),
+panel.background = element_blank(), axis.line = element_line(colour = "black"))
+
+##Permutation test
+
+N_PERMUTATIONS = 10000
+
+corPerm <- numeric(length = N_PERMUTATIONS)
+for(i in 1:N_PERMUTATIONS)
+{
+ shufdata <- combined_data_df[sample(nrow(combined_data_df)),]
+ corPerm[i] <- cor(shufdata$reviewgap, combined_data_df$mean_recgap)
+}
+corObserved <- cor(combined_data_df$reviewgap, combined_data_df$mean_recgap)
+
+
+p_value_Cor <- (sum(corPerm>=corObserved)+1)/length(corPerm)
+print(c("p value:", p_value_Cor))
+
+hist(corPerm, xlim=range(c(corPerm,corObserved)))
+abline(v=corObserved, col="red")
+
+
+
+```
+
+
+#Linear Regression for every algo (recgap x reveiwgap)
+```{r}
+##get b weight for every regression line
+#UBCF
+lm_ubcf = lm(mean_recgap[combined_data_df$algo == "UBCF"] ~ reviewgap[combined_data_df$algo == "UBCF"], data = combined_data_df)
+b_ubcf = lm_ubcf$coefficients[2]
+
+#IBCF
+lm_ibcf = lm(mean_recgap[combined_data_df$algo == "IBCF"] ~ reviewgap[combined_data_df$algo == "IBCF"], data = combined_data_df)
+b_ibcf = lm_ibcf$coefficients[2]
+
+#POP
+lm_pop = lm(mean_recgap[combined_data_df$algo == "POP"] ~ reviewgap[combined_data_df$algo == "POP"], data = combined_data_df)
+b_pop = lm_pop$coefficients[2]
+
+
+##plot regression line grouped by algo
+ggplot(combined_data_df,aes(x=reviewgap, 
+             y=mean_recgap, 
+             color=algo))+
+  geom_point()+
+  geom_smooth(method="lm", se = FALSE)+ theme(panel.grid.major = element_blank(), 
+                                              panel.grid.minor = element_blank(),
+panel.background = element_blank(), axis.line = element_line(colour = "black")) +
+  geom_text(aes(x = 3e+05, y = 0.0075, 
+                label = sprintf("b = %s", formatC(b_ubcf, format = "e", digits = 2)), 
+                color = "UBCF")) +
+  geom_text(aes(x = 3e+05, y = 0.0037, 
+                label = sprintf("b = %s", formatC(b_ibcf, format = "e", digits = 2)), 
+                color = "IBCF")) +
+  geom_text(aes(x = 3e+05, y = 0.000, 
+                label = sprintf("b = %s", formatC(b_pop, format = "e", digits = 2)), 
+                color = "POP"))+
+  
+  ggtitle("Regression of mean bootstrapped recgap and reviewgap, by every algortihm")
+```
+
