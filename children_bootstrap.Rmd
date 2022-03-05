@@ -1,0 +1,424 @@
+---
+title: "Creator Gender Fairness in Childrens' Book Recommendations"
+author: "Group 13"
+date: "12/21/2021"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+
+```{r, eval=FALSE}
+install.packages("recommenderlab")
+```
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+setwd(dirname(rstudioapi::getSourceEditorContext()$path))
+```
+
+
+```{r}
+suppressPackageStartupMessages({
+  library(jsonlite)
+  library(dplyr)
+  library(WikidataR)
+  library(recommenderlab)
+  library(boot)
+  library(ggplot2)
+})
+```
+
+## Citations
+
+
+UCSD Bookgraph dataset:
+    * Mengting Wan, Julian McAuley, "Item Recommendation on Monotonic Behavior Chains", in RecSys'18.
+    * Mengting Wan, Rishabh Misra, Ndapa Nakashole, Julian McAuley, "Fine-Grained Spoiler Detection from Large-Scale Review Corpora", in ACL'19.
+
+Recommenderlab
+* Michael Hahsler (2021). recommenderlab: Lab for Developing and Testing Recommender Algorithms. R package version 0.2-7.
+
+
+
+
+## Constants
+
+```{r}
+GOOD_RATING = 4
+MIN_REVIEWS_OF_BOOK = 50
+MIN_REVIEWS_BY_USER = 50
+BOOK_GENRE = "children"
+NUM_BOOT_REPLICATES = 10
+```
+
+
+## Load Data 
+
+```{r readAuthors}
+books_genre_df <- read.csv( sprintf("data/goodreads_books_%s.csv", BOOK_GENRE) )
+authors_genre_df <- read.csv( sprintf("data/goodreads_books_authors_%s.csv", BOOK_GENRE) )
+
+books_authors_genre <- inner_join(authors_genre_df, books_genre_df, by="author_id")
+
+books_authors_genre %>%  count(gender) -> books_authors_genre_count
+
+print(books_authors_genre_count)
+barplot(books_authors_genre_count$n, names.arg = books_authors_genre_count$gender)
+```
+
+Though we have non-binary gender values, due to the nature of our analysis, we will have to restrict to a gender binary!
+
+
+```{r}
+books_authors_genre %>%
+  filter(gender == "FEMALE" | gender == "MALE") -> books_authors_genre
+
+
+books_authors_genre %>%  count(gender) -> books_authors_genre_count
+
+print(books_authors_genre_count)
+barplot(books_authors_genre_count$n, names.arg = books_authors_genre_count$gender)
+```
+
+Now we have a gender binary!
+
+```{r}
+reviews_genre_df <- read.csv( sprintf("data/goodreads_reviews_%s.csv", BOOK_GENRE) )
+
+# Rating 0 means unrated;  Remove
+reviews_genre_df %>%
+  filter(rating > 0) -> reviews_genre_df
+
+hist(reviews_genre_df$rating)    
+```
+
+Heavily skewed to positive ratings -> Might need to adjust?
+
+
+```{r}
+genre_books_reviews <- inner_join( reviews_genre_df, books_authors_genre, by="book_id" )
+
+genre_books_reviews %>% count(gender) -> books_reviews_genre_count
+
+print(books_reviews_genre_count)
+barplot(books_reviews_genre_count$n, names.arg = books_reviews_genre_count$gender)
+```
+Looks like the reviews are evenly distributed for this genre!
+
+
+
+```{r}
+genre_books_reviews <- genre_books_reviews %>%
+  mutate(like_or_dislike =  
+    case_when( 
+       rating >= GOOD_RATING ~ "LIKE", 
+       TRUE ~ "DISLIKE"
+    )
+  )
+```
+
+
+Let's ensure that there are only those users with at least MIN_REVIEWS_BY_USER reviews
+
+```{r}
+genre_books_reviews %>%
+  add_count(user_id, name="n_reviews_by_user") %>%
+  filter(n_reviews_by_user >= MIN_REVIEWS_BY_USER) %>%
+  arrange(desc(n_reviews_by_user)) -> genre_books_reviews
+
+head(genre_books_reviews %>% select(user_id, book_id, rating, n_reviews_by_user) %>% arrange(n_reviews_by_user))
+```
+
+```{r}
+genre_books_reviews %>%
+  add_count(book_id, name="n_reviews_of_book") %>%
+  filter(n_reviews_of_book >= MIN_REVIEWS_OF_BOOK) -> genre_books_reviews
+
+head(genre_books_reviews %>% select(user_id, book_id, rating, n_reviews_of_book) %>% arrange(n_reviews_of_book))
+```
+
+```{r}
+head(genre_books_reviews)
+```
+
+
+```{r}
+genre_books_reviews$user_id <- as.factor(genre_books_reviews$user_id)
+genre_books_reviews$book_id <- as.factor(genre_books_reviews$book_id)
+
+head(genre_books_reviews %>% select(user_id, book_id, rating) -> sampled_reviews_df)
+```
+
+
+
+```{r}
+getRecall <- function(the_df) {   # Confirm the metrics.  Do we need to also take Dislikes into account
+  true_positives <- sum(the_df$like_or_dislike=="LIKE" & the_df$prediction == "LIKE")
+  false_negatives <- sum(the_df$like_or_dislike=="LIKE" & the_df$prediction != "LIKE")
+  #print( sprintf("TP: %d, FN: %d", true_positives, false_negatives) )
+  return ( (true_positives)/(true_positives+false_negatives) )
+}
+```
+
+## Bootstrap
+
+```{r warnings=FALSE}
+ReturnRecgap <- function(reviews_df, sampleindices, the_algo)
+{
+  tryCatch(
+    expr = {
+      # reviews_df will contain the dataframe.  
+      sampled_reviews_df <- reviews_df[sampleindices, ] # we will use this for bootstrapping
+      
+      # make a realRatingMatrix out of it and create an evaluation scheme
+      sampled_reviews_df$user <- as.factor(sampled_reviews_df$user_id)
+      sampled_reviews_df$item <- as.factor(sampled_reviews_df$book_id)
+      sampled_reviews_df$rating <- as.numeric(sampled_reviews_df$rating)
+      sampled_reviews_df %>% select(user, item, rating) -> sampled_reviews_df
+      sampled_reviews_Matrix <- as(sampled_reviews_df, "realRatingMatrix")
+      
+      evaluation_scheme_ubcf <- evaluationScheme(data = sampled_reviews_Matrix,
+                                                 method = "split",
+                                                 train = 0.9,
+                                                 given = -1,
+                                                 goodRating = GOOD_RATING)
+      
+      train_data <- getData(evaluation_scheme_ubcf, "train")
+      known_data <- getData(evaluation_scheme_ubcf, "known")
+      
+      # Sometimes, known_data has rows that are all NA!
+      # remove such rows
+      known_data <- as(known_data, "matrix")
+      known_data <- known_data[ rowSums(is.na(known_data)) != ncol(known_data), ] 
+      known_data <- as(known_data, "realRatingMatrix")
+      
+      the_recommender <- Recommender( train_data, the_algo )
+      
+      the_predictions <- predict( the_recommender, known_data , type="ratings", n = 5 )
+      the_predictions_df <- as(the_predictions, "data.frame")
+      
+      the_predictions_df <- the_predictions_df %>% 
+        rename(
+          cf_rating = rating,
+          user_id = user,
+          book_id = item
+        ) %>%
+        mutate(prediction_cf = 
+                 case_when( 
+                   cf_rating >= GOOD_RATING ~ "LIKE", 
+                   TRUE ~ "DISLIKE"
+                 ))
+      known_data_df <- as(known_data, "data.frame")
+      
+      cf_df <- inner_join(
+        genre_books_reviews, 
+        the_predictions_df, 
+        by=c("user_id", "book_id")
+      )
+      
+      cf_df_female <- cf_df %>% filter(gender == "FEMALE")
+      cf_df_male <- cf_df %>% filter(gender == "MALE")
+      
+      overall_evaluationsscore_cf     <- getRecall(cf_df)
+      mean_evaluationscore_female_cf  <- getRecall(cf_df_female)
+      mean_evaluationscore_male_cf    <- getRecall(cf_df_male)
+      recgap_genre_cf <- abs(mean_evaluationscore_female_cf - mean_evaluationscore_male_cf) 
+      
+      message("Successfully Run Bootstap iteration")
+      
+      ret <- c( overall_evaluationsscore_cf, recgap_genre_cf ) 
+      names(ret) <- c( "performance", "recgap" )
+      return(ret)
+    },
+    error = function(e) {
+      overall_evaluationsscore_cf     <- NA
+      recgap_genre_cf <- NA
+      message("Got an error.  Returning NA, NA!")
+      
+      ret <- c( overall_evaluationsscore_cf, recgap_genre_cf ) 
+      names(ret) <- c( "performance", "recgap" )
+      return(ret)
+    }, finally = {
+      message("In finally block")
+    }
+  )
+}
+
+genre_books_reviews %>% 
+  select(user_id, book_id, rating, gender, like_or_dislike) -> sampled_reviews
+
+
+get_cf_boot_results <- function( cf_algo ) {
+  
+   boot_results_cf <- boot(
+    data = sampled_reviews, 
+    statistic = ReturnRecgap, 
+    R = NUM_BOOT_REPLICATES, 
+    the_algo = cf_algo
+  )
+  
+  as.data.frame(boot_results_cf$t) %>% 
+    rename(performance = V1, recgap = V2) %>% 
+    filter( !is.na(performance) & !is.na(recgap) ) -> results_cf
+  
+  results_cf$algo <- cf_algo
+  
+  return ( results_cf )
+}
+
+```
+
+
+## Item-Based Collaborative Filtering (IBCF)
+
+Here, we used Item-Based CF in order to make recommendations.  IBCF assumes 
+that users will prefer items similar to other items that they like.  The
+recommenderlab package figures out that two items are similar by calculating 
+the statistical distance between them.  Here, we are using the cosine distance
+between them to find out this distance.
+
+```{r warning=FALSE, message=FALSE}
+ibcf_boot_results <- get_cf_boot_results("IBCF")
+
+head(ibcf_boot_results)
+```
+
+## User-Based Collaborative Filtering (UBCF)
+
+UBCF tries to mimic word-of-mouth recommendations.  If a user U1 likes Books B1
+and B2, chances are that user U2 will also like these books, if U1 and U2 are
+similar to each other.  To find out whether two users are similar, the
+recommenderlab package users k-nearest-neighbours to find similar users, using
+cosine or pearson similarity.
+
+```{r warning=FALSE, message=FALSE}
+ubcf_boot_results <- get_cf_boot_results("UBCF")
+
+head(ubcf_boot_results)
+```
+
+## POP
+
+This is just recommends everyone the same N books that are "most popular".  It
+can be thought of as being similar to the Billboard Top 100
+
+```{r warning=FALSE, message=FALSE}
+svd_boot_results <- get_cf_boot_results("SVD")
+
+head(svd_boot_results)
+```
+
+## RANDOM
+
+This is just a random set of recommendations.  Just serves as a baseline
+
+```{r warning=FALSE, message=FALSE}
+random_boot_results <- get_cf_boot_results("RANDOM")
+
+head(random_boot_results)
+```
+
+## POP
+
+This is just recommends everyone the same N books that are "most popular".  It
+can be thought of as being similar to the Billboard Top 100
+
+```{r warning=FALSE, message=FALSE}
+pop_boot_results <- get_cf_boot_results("POP")
+
+head(pop_boot_results)
+```
+
+
+## Compare various algorithms and genres!
+
+We can now compare the algorithms with each other, visually.  We have up to
+`NUM_BOOT_REPLICATES` results for each algo.  We can compare the means, and 
+get confidence intervals, standard deviations and standard errors.
+
+Credit:  https://www.r-graph-gallery.com/4-barplot-with-error-bar.html
+
+```{r}
+boot_results <- rbind(
+  ibcf_boot_results, 
+  ubcf_boot_results, 
+  svd_boot_results, 
+  pop_boot_results, 
+  random_boot_results
+)
+
+sum_recgaps <- boot_results %>%
+  group_by(algo) %>%
+  summarise( 
+    n=n(),
+    mean=mean(recgap),
+    sd=sd(recgap)
+  ) %>%
+  mutate( se=sd/sqrt(n))  %>%
+  mutate( ic=se * qt((1-0.05)/2 + .5, n-1))
+ 
+# Standard deviation
+ggplot(sum_recgaps) +
+  geom_bar( aes(x=algo, y=mean), stat="identity", fill="forestgreen", alpha=0.5) +
+  geom_errorbar( aes(x=algo, ymin=mean-sd, ymax=mean+sd), width=0.4, colour="orange", alpha=0.9, size=1.5) +
+  ggtitle("using standard deviation")
+ 
+# Standard Error
+ggplot(sum_recgaps) +
+  geom_bar( aes(x=algo, y=mean), stat="identity", fill="forestgreen", alpha=0.5) +
+  geom_errorbar( aes(x=algo, ymin=mean-se, ymax=mean+se), width=0.4, colour="orange", alpha=0.9, size=1.5) +
+  ggtitle("using standard error")
+ 
+# Confidence Interval
+ggplot(sum_recgaps) +
+  geom_bar( aes(x=algo, y=mean), stat="identity", fill="forestgreen", alpha=0.5) +
+  geom_errorbar( aes(x=algo, ymin=mean-ic, ymax=mean+ic), width=0.4, colour="orange", alpha=0.9, size=1.5) +
+  ggtitle("using confidence interval")
+
+```
+
+
+Just to know: kolmogorov-smirnov test
+
+
+```{r}
+cor( ibcf_boot_results$recgap , ibcf_boot_results$performance )
+plot( ibcf_boot_results$recgap , ibcf_boot_results$performance )
+
+cor( ubcf_boot_results$recgap , ubcf_boot_results$performance )
+plot( ubcf_boot_results$recgap , ubcf_boot_results$performance )
+
+cor( svd_boot_results$recgap , svd_boot_results$performance )
+plot( svd_boot_results$recgap , svd_boot_results$performance )
+
+cor( pop_boot_results$recgap , pop_boot_results$performance )
+plot( pop_boot_results$recgap , pop_boot_results$performance )
+
+cor( random_boot_results$recgap , random_boot_results$performance )
+plot( random_boot_results$recgap , random_boot_results$performance )
+```
+
+```{r}
+recgaps_all <- c( 
+  mean(ibcf_boot_results$recgap), 
+  mean(ubcf_boot_results$recgap),
+  mean(svd_boot_results$recgap), 
+  mean(pop_boot_results$recgap), 
+  mean(random_boot_results$recgap)
+)
+performance_all <- c( 
+  mean(ibcf_boot_results$performance), 
+  mean(ubcf_boot_results$performance),
+  mean(svd_boot_results$performance), 
+  mean(pop_boot_results$performance), 
+  mean(random_boot_results$performance)
+)
+
+cor(performance_all, recgaps_all)
+plot(performance_all, recgaps_all)
+```
+
+
