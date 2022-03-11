@@ -1,0 +1,331 @@
+---
+title: "DataGathering"
+author: "Group 13"
+date: "12/31/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+setwd(dirname(rstudioapi::getSourceEditorContext()$path))
+```
+
+## Libraries
+
+```{r eval=FALSE}
+install.packages("WikidataR")
+install.packages("httr")
+install.packages("gender")
+```
+
+
+
+```{r libraries}
+suppressPackageStartupMessages({
+  library(dplyr)
+  library(stringr)
+  library(WikidataR)
+  library(gender)
+  library(tidyr)
+})
+```
+## Citations
+
+
+UCSD Bookgraph dataset:
+    * Mengting Wan, Julian McAuley, "Item Recommendation on Monotonic Behavior Chains", in RecSys'18.
+    * Mengting Wan, Rishabh Misra, Ndapa Nakashole, Julian McAuley, "Fine-Grained Spoiler Detection from Large-Scale Review Corpora", in ACL'19.
+
+
+
+## Gender Information
+
+We would like to use wikidata in order to get reliable gender.  Wikidata internally uses VIAF, which is a collaboration between many of the world's libraries.  In some cases, wikidata also uses other catalog sources.
+
+For querying wikidata, we rely on wikidataR, an R package which lets us query the wikidata SPARQL API.  This can also be obtained manually, from query.wikidata.org itself.
+
+```{r, eval=FALSE}
+# The following files were obtained manually using query.wikidata.org!
+#wikidata_authors_from0_to50000.csv
+#wikidata_authors_from50000_to100000.csv
+#wikidata_authors_from100000_to150000.csv
+#wikidata_authors_from150000_to200000.csv
+
+the_offset <- 225000
+the_limit  <-  50000
+the_total_count <- 421977
+
+i <- 1
+
+while (the_offset < the_total_count) {
+  the_query <- sprintf('
+  #Authors with Gender
+  SELECT ?human ?humanLabel ?gender
+  WHERE
+  {
+    VALUES ?professions {wd:Q482980 wd:Q36180 wd:Q49757}    # author, writer or poet
+    ?human wdt:P31 wd:Q5 .                                  # find humans
+    ?human wdt:P106 ?professions .                  
+    ?human wdt:P21 ?gender .
+    
+    SERVICE wikibase:label { bd:serviceParam wikibase:language "[AUTO_LANGUAGE],en" }
+  }
+  OFFSET %d
+  LIMIT %d
+  ', the_offset, the_limit)
+  
+  author_tibble <- query_wikidata(the_query)
+  
+  the_filename <- sprintf("wikidata_authors_from%d_to%d.csv", the_offset, the_offset + the_limit)
+  print( sprintf("Writing file: %s", the_filename) )
+  write.csv(author_tibble, the_filename)
+  
+  the_offset <- the_offset + the_limit
+  Sys.sleep(20 * 60 * i)      # Be Nice
+  i <- i + 1
+}
+```
+The individual files were stitched together using standard unix utilities. and saved to disk as `wikidata_genders.csv`
+
+The csv files above contain wikidata codes for the genders cataloged.  We should also obtain information about all possible wikidata genders.
+
+```{r eval=FALSE}
+the_gender_query <- '
+# Genders of Wikidata
+SELECT ?gender ?genderLabel
+WHERE
+{
+  ?gender wdt:P31 wd:Q48264 .
+  
+  SERVICE wikibase:label { bd:serviceParam wikibase:language "[AUTO_LANGUAGE],en" }
+}
+'
+
+gender_tibble <- query_wikidata(the_gender_query)
+write.csv(gender_tibble, "wikidata_genders.csv")
+```
+
+
+
+## Loading Goodreads Data
+
+The exercises rely on Goodreads data collected by Mengting Wan et al.  Of these, we look at the file `goodreads_book_authors.csv` which contains all the authors from their dataset.
+
+```{r loadDF}
+goodreads_authors_df <- read.csv( "goodreads_book_authors.csv" )
+wikidata_authors_df <- read.csv( sprintf("wikidata/%s", "wikidata_authors_quoted.csv") )
+wikidata_genders_df <- read.csv( sprintf("wikidata/%s", "wikidata_genders.csv") )
+
+print( head(goodreads_authors_df) )
+print( head(wikidata_authors_df) )
+print( head(wikidata_genders_df) )
+
+wikidata_authors_df <- inner_join(
+                          x = wikidata_authors_df,
+                          y = wikidata_genders_df,
+                          by = "author_gender_qid"
+                        )
+```
+
+
+
+Which Goodreads Authors have WikiData entries
+
+```{r}
+left_join(
+  x = goodreads_authors_df,
+  y = wikidata_authors_df,
+  by = "author_name"
+) -> goodreads_authors_wikidata
+
+print(head(goodreads_authors_wikidata))
+
+```
+
+```{r}
+goodreads_authors_wikidata %>% count(wikidata_gender) -> plot_df
+barplot(plot_df$n, names.arg = plot_df$wikidata_gender)
+```
+
+
+Most of the authors have no WikiData entry.  For such authors, let us try to use the package `gender` to determine gender based on the first name of the author.  This has a few downsides:
+1. It is highly-culturally dependent.  For example, East Asian "first" names are sometimes the family name rather than the personal name.
+2. It is also temporally dependent.  Names that used to be popular Girls' names in the past are now popular Boys' names.
+3. It is also ambiguous.  Names like "Evelyn" are used for both Girls and Boys
+4. It can be misleading.  Some authors (like the English novelist George Eliot) use pseudonyms that don't match their gender Identity.
+
+Note: this chunk takes 4-5hours to finish.
+```{r eval=FALSE}
+tmpdf %>% 
+  distinct(author_firstname) %>% 
+  rowwise() %>% 
+  do(results = gender(.$author_firstname)) -> demodf
+
+# Remove those with no results.
+demodf_existing <- demodf %>% filter(nrow(results)!=0)
+
+demodf_existing %>% 
+  do(bind_rows(.$results)) -> demodf
+  
+write.csv(demodf, "firstnames_genders.csv")
+```
+
+
+
+```{r eval=FALSE}
+goodreads_authors_wikidata %>%
+  separate(
+    col = author_name, 
+    remove = FALSE,
+    into = c("author_firstname"),
+    sep = " "
+  ) -> tmpdf
+inferred_df <- read.csv("firstnames_genders.csv")
+inferred_df
+tmpdf <- left_join(tmpdf, inferred_df, by=c("author_firstname" = "name"))
+tmpdf
+goodreads_authors_wikidata <- tmpdf %>% 
+  rename(inferred_gender = gender) %>%
+  select( c("author_id", "author_name", "author_qid", "wikidata_gender", "proportion_male", "proportion_female", "inferred_gender") )
+
+goodreads_authors_wikidata <- goodreads_authors_wikidata %>% 
+  mutate(
+    wikidata_gender = toupper(wikidata_gender),
+    inferred_gender = toupper(inferred_gender),
+  )
+
+write.csv(goodreads_authors_wikidata, "wikidata_authors_gendered_inferred.csv")
+```
+
+
+Now, for many of the authors, we have either gender data from wikidata or inferred from the first name.  
+Wikidata gender identity information comes from libraries across the world, mostly collected in Virtual Internet Authority File (VIAF). This information was collected by professional catalogers and librarians.
+
+
+
+Let us look at the various genders of the dataframe
+
+```{r}
+goodreads_authors_wikidata <- read.csv("wikidata_authors_gendered_inferred.csv")
+
+goodreads_authors_wikidata %>%
+  count( inferred_gender ) -> plot_df
+barplot(plot_df$n, names.arg = plot_df$inferred_gender)
+```
+
+
+Authors where wikidata and the the package gender disagree
+```{r}
+goodreads_authors_wikidata %>%
+  filter( wikidata_gender != inferred_gender )
+```
+There are 1694 authors for whom the wikidata gender is different from the inferred gender.  Some of these are due to cultural differences (Ha Jin, Li Ao), some because the gender is non-binary (Leslie Feinberg).  Others are due to the names being unisex (Evelyn Waugh, Robin Cook).
+Given that Wikidata gender is determined from the work of professional catalogers, we prioritize it over the inferred gender.
+
+
+For which authors could we not get any gender information at all?
+
+```{r}
+goodreads_authors_wikidata %>%
+  filter( is.na(wikidata_gender) & is.na(inferred_gender) )
+```
+There are 156852 authors with no gender information at all.  Unfortunately, for our analysis, we have to remove such authors.
+
+
+```{r}
+goodreads_authors_wikidata %>%
+  filter( !is.na(wikidata_gender) | !is.na(inferred_gender) ) %>%
+  mutate(
+    gender = case_when(
+      is.na(wikidata_gender) ~ inferred_gender,
+      TRUE ~ wikidata_gender
+    )
+  ) %>%
+  arrange(author_id) %>%
+  select( c("author_id", "author_name", "gender") ) -> gr_authors_gendered
+gr_authors_gendered
+```
+
+So, we now have 674561 authors with gender identity.  It is less than the original dataset but it is still a large value.
+
+
+```{r}
+gr_authors_gendered %>%
+  count( gender ) -> plot_df
+
+plot_df
+barplot(plot_df$n, names.arg = plot_df$gender)
+```
+
+
+Let's just save it
+
+```{r eval=FALSE}
+write.csv(gr_authors_gendered, "goodreads_book_authors_gendered.csv")
+```
+
+```{r}
+gr_authors_gendered <- read.csv("goodreads_book_authors_gendered.csv")
+gr_authors_gendered
+```
+
+## Genres
+
+Let us now try to get smaller datasets for various genres
+
+```{r, eval=FALSE}
+write_authors_genre <- function(genre, authors_df) {
+  genre_books_df <- read.csv( sprintf("goodreads_books_%s.csv", genre) )
+  inner_join(authors_df, genre_books_df, by="author_id") %>%
+    select( c("author_id", "author_name", "gender") ) %>%
+    distinct() -> genre_df
+  write.csv( genre_df, sprintf("goodreads_books_authors_%s.csv", genre) )
+}
+```
+
+
+## Childrens Books
+
+```{r eval=FALSE}
+write_authors_genre("children", gr_authors_gendered)
+```
+
+
+## Mystery/Thriller/Crime Books
+
+```{r eval=FALSE}
+write_authors_genre("mystery_thriller_crime", gr_authors_gendered)
+```
+
+## Poetry Books
+
+```{r eval=FALSE}
+write_authors_genre("poetry", gr_authors_gendered)
+```
+
+
+## History/Biography Books
+
+```{r eval=FALSE}
+write_authors_genre("history_biography", gr_authors_gendered)
+```
+
+
+## Fantasy/Paranormal Books
+
+```{r eval=FALSE}
+write_authors_genre("fantasy_paranormal", gr_authors_gendered)
+```
+
+
+## Comic/Graphic Books
+
+```{r eval=FALSE}
+write_authors_genre("comics_graphic", gr_authors_gendered)
+```
+
+
+The saved CSV files can be used in their individual Rmd files!
+
+
+
