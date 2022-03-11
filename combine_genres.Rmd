@@ -81,16 +81,16 @@ for (i in seq(1, length(genre_names))) {
 
 ```{r}
 ggplot(combined_data_df, 
-       aes(fill=genre, y=abs(mean_recgap), x=reorder(algo, -mean_recgap))) + 
+       aes(fill=genre, y=mean_recgap, x=reorder(algo, -mean_recgap))) + 
     geom_bar(position=position_dodge(), stat="identity") +
   geom_errorbar( 
-    aes(ymin=abs(mean_recgap)-ic, ymax=abs(mean_recgap)+ic), 
+    aes(ymin=mean_recgap-ic, ymax=mean_recgap+ic), 
     width=0.4, 
     alpha=0.9, 
     size=0.5, 
     position=position_dodge(.9)) +
-  ggtitle("Comparison of mean bootstrapped recgaps, by algorithm and genre. \nWhiskers indicate 95% confidence intervall.") +
-  labs(x = "algorithm", y = "recgap") +
+  ggtitle("Recommendation unfairness towards author's gender") +
+  labs(x = "Algorithm", y = "RecGap") +
   theme_bw()
 
 #get range of absolute recgap for every algo
@@ -211,6 +211,7 @@ panel.background = element_blank(), axis.line = element_line(colour = "black")) 
                 label = sprintf("b = %s", formatC(b_pop, format = "e", digits = 2)), 
                 color = "POP"))+
   
-  ggtitle("Regression of mean bootstrapped recgap and reviewgap, by every algortihm")
+  ggtitle("Regression of RecGap and ReviewGap, by every algorithm")+
+  labs(x = "ReviewGap", y = "RecGap") 
 ```
 
