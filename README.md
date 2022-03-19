@@ -1,19 +1,19 @@
 # author-gender-fairness
 This repo is meant to investigate the gender bias of collaborative filter algorithms in the book domain.
 Data about books, authors and ratings rely on the datasets created by Wan et al. (2018), from Goodreads data scraped in 2017. We used datasets corresponding to five genres:
-• Comics (89,411 books, 542,338 detailed reviews)
-• Mystery/Thriller/Crime (219,235 books, 1,849,236 detailed reviews)
-• Fantasy/paranormal (258,585 books, 3,424,641 detailed reviews)
-• History/Biography (302,935 books, 2,066,193 detailed reviews)
-• Children’s books (124,082 books, 734,640 detailed reviews)
+1. Comics (89,411 books, 542,338 detailed reviews)
+2. Mystery/Thriller/Crime (219,235 books, 1,849,236 detailed reviews)
+3. Fantasy/paranormal (258,585 books, 3,424,641 detailed reviews)
+4. History/Biography (302,935 books, 2,066,193 detailed reviews)
+5. Children’s books (124,082 books, 734,640 detailed reviews)
 
 Data processing is inspired by the work of Melchiorre et al., (2021).
 
 # Contents
--Data folder contains scripts for data gathering and filtering.
--Output folder is needed for saving results
--genre_bootstrap.rmd file processes one genre from the data folder. It computes the difference in performance (RecGap) for UBCF, IBCF and pop by gender and saves its results into the output folder.
--combine_genres.Rmd combines the outputs for comparison.
+1. Data folder contains scripts for data gathering and filtering.
+2. Output folder is needed for saving results
+3. genre_bootstrap.rmd file processes one genre from the data folder. It computes the difference in performance (RecGap) for UBCF, IBCF and pop by gender and saves its results into the output folder.
+4. combine_genres.Rmd combines the outputs for comparison.
 
 # Instruction
 1. Download repository.
