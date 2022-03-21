@@ -19,7 +19,7 @@ Data processing is inspired by the work of Melchiorre et al., (2021).
 1. Download repository.
 2. [Download](https://sites.google.com/eng.ucsd.edu/ucsdbookgraph/home) the dataset from UCSD `goodreads_books_<genre>.json.gz` and `goodreads_reviews_<genre>.json.gz` into the data directory 
 3. Run 'data/GatherData.Rmd' and 'data/reduce_file_size.sh' to gather and reduce data.
-    1. In case you want to skip these data gathering steps and use ready-to-go dataset, you may download the gender-augmented data [here](https://unigraz-my.sharepoint.com/:u:/g/personal/mateo_jukic_edu_uni-graz_at/EVzpRu8KVWFCuMTbW7DLKakBCHTkDU3BUU2iBCrFMHynCw?e=zO8T3d).  Unzip it into the data folder.
+    1. In case you want to skip these data gathering steps and use ready-to-go dataset, contact us at mateo.jukic@edu.uni-graz.at.
 4. Run the genre-specific Rmd files for getting a bootstrapped RecGap. Output will be stored in the 'output' folder.
 5. Run 'combine_genres.Rmd' to compare RecGaps from all genres.
   
